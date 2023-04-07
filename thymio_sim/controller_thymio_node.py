@@ -7,7 +7,7 @@ from nav_msgs.msg import Odometry
 
 import sys
 
-class ControllerNode(Node):
+class ControllerThymioNode(Node):
     def __init__(self):
         super().__init__('controller_thymio_node')
         
@@ -102,7 +102,7 @@ def main():
     rclpy.init(args=sys.argv)
     
     # Create an instance of your node class
-    node = ControllerNode()
+    node = ControllerThymioNode()
     node.start()
     
     # Keep processings events until someone manually shuts down the node
