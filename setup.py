@@ -26,7 +26,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-        'controller_thymio_node = thymio_sim.controller_thymio_node:main'
+        'controller_thymio_node = thymio_sim.controller_thymio_node:main',
+        'task_2_node = thymio_sim.task_2_controller:main'
         ],
     },
 )

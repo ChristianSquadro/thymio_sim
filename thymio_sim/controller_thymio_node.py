@@ -77,7 +77,6 @@ class ControllerThymioNode(Node):
         return pose2
         
     def update_callback(self):
-
         if self.trajectory["dt"][self.step] != self.n_updates:
             #open-loop controller
             cmd_vel = Twist() 
