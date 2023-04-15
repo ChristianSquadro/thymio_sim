@@ -136,7 +136,7 @@ class ControllerThymioNode(Node):
             cmd_vel.linear.x  = .5 # [m/s]
             self.vel_publisher.publish(cmd_vel)
             proximity_readings = self.get_last_proximities()
-            if proximity_readings['center'] <= .09:
+            if proximity_readings['center'] <= .1:
                 self.state = ControllerState.STABILIZING
         elif self.state == ControllerState.STABILIZING:
             if self.stabilization_start == None:
@@ -170,9 +170,6 @@ class ControllerThymioNode(Node):
                 cmd_vel = Twist() 
                 cmd_vel.angular.z  = 6*(np.sign(self.alignment_rotation) * np.pi/90) # [rad/s] 2 degrees/second
                 self.vel_publisher.publish(cmd_vel)
-            else:
-                self.get_logger().info("STATE: STOPPED")
-                self.state = ControllerState.STOPPED
             if stable_readings['rear_right'] != inf and round(stable_readings['rear_left'],2) - round(stable_readings['rear_right'],2) == 0:
                 cmd_vel = Twist() 
                 cmd_vel.angular.z  = 0.0 # [rad/s] 2 degrees/second

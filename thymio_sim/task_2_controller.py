@@ -10,16 +10,19 @@ from geometry_msgs.msg import Twist, Pose
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Range
 from enum import Enum
+from rclpy.task import Future
 
 import sys
 from thymio_sim.utils import list_mode
 
 class ControllerState(Enum):
-    FORWARD = 1,
+    FORWARD_with_SENSOR = 1,
     ROTATING = 2,
     ALIGNING_START = 5,
     STOPPED = 3,
-    STABILIZING = 4
+    STABILIZING = 4,
+    FORWARD_with_ODOMETRY = 6,
+
 
 class ControllerThymioNode(Node):
     def __init__(self):
@@ -39,9 +42,9 @@ class ControllerThymioNode(Node):
         # self.odom_callback every time a message is received
         self.odom_subscriber = self.create_subscription(Odometry, 'odom', self.odom_callback, 1)
 
-        proximity_keys = ["center_left", "center", "center_right"]
+        proximity_keys = ["center_left", "center", "center_right", "rear_left", "rear_right"]
         self.proximity_readings = {
-            key : deque(maxlen=10) for key in proximity_keys
+            key : deque(maxlen=25) for key in proximity_keys
         }
 
         def make_closure(sensor_name):
@@ -61,7 +64,9 @@ class ControllerThymioNode(Node):
     def start(self):
         # Create and immediately start a timer that will regularly publish commands
         self.timer = self.create_timer(1/60, self.update_callback)
-        self.state = ControllerState.FORWARD
+        self.done_future= Future()
+        self.state = ControllerState.FORWARD_with_SENSOR
+        return self.done_future
     
     def stop(self):
         # Set all velocities to zero
@@ -69,7 +74,7 @@ class ControllerThymioNode(Node):
         self.vel_publisher.publish(cmd_vel)
 
     def proximity_callback(self, sensor : str, msg : Range):
-        to_append = inf if msg.range == -1 else msg.range
+        to_append = inf if msg.range == -1 or msg.range > 0.138 else msg.range
         self.proximity_readings[sensor].appendleft(to_append)
 
     
@@ -79,14 +84,14 @@ class ControllerThymioNode(Node):
         
         pose2d = self.pose3d_to_2d(self.odom_pose)
         
-        self.get_logger().info(
-            "odometry: received pose (x: {:.2f}, y: {:.2f}, theta: {:.2f})".format(*pose2d),
-             throttle_duration_sec=0.5 # Throttle logging frequency to max 2Hz
-        )
-        self.get_logger().info(
-            f"odometry: received pose {msg.pose.pose}",
-             throttle_duration_sec=0.5 # Throttle logging frequency to max 2Hz
-        )
+        #self.get_logger().info(
+        #   "odometry: received pose (x: {:.2f}, y: {:.2f}, theta: {:.2f})".format(*pose2d),
+        #     throttle_duration_sec=0.5 # Throttle logging frequency to max 2Hz
+        #)
+        #self.get_logger().info(
+        #    f"odometry: received pose {msg.pose.pose}",
+        #    throttle_duration_sec=0.5 # Throttle logging frequency to max 2Hz
+        #)
     
     def pose3d_to_2d(self, pose3):
         quaternion = (
@@ -117,10 +122,16 @@ class ControllerThymioNode(Node):
             else:
                 result[k] = inf
         return result
-            
+    
+    def get_last_prox_without_noise(self):
+        return
     def update_callback(self):
+        '''
+        stable_readings = self.get_stable_proximities()
+        self.get_logger().info(str(stable_readings["center_right"]))
+        '''
         
-        if self.state == ControllerState.FORWARD:
+        if self.state == ControllerState.FORWARD_with_SENSOR:
             cmd_vel = Twist() 
             cmd_vel.linear.x  = .5 # [m/s]
             self.vel_publisher.publish(cmd_vel)
@@ -135,7 +146,7 @@ class ControllerThymioNode(Node):
                 self.stabilization_start = time()
                 self.get_logger().info("STATE: STABILIZING")
 
-            elif time() - self.stabilization_start >= 1:
+            elif time() - self.stabilization_start >= 3:
                 self.stabilization_start = None
                 self.state = ControllerState.ALIGNING_START
         elif self.state == ControllerState.ALIGNING_START:
@@ -153,14 +164,18 @@ class ControllerThymioNode(Node):
             self.get_logger().info(f"Rotation: {rotation} ({np.rad2deg(rotation)})")
         elif self.state == ControllerState.ROTATING:
             pose = self.pose3d_to_2d(self.odom_pose)
-            if abs(pose[-1] - self.alignment_target_pose[-1]) > np.deg2rad(10):
+            stable_readings = self.get_stable_proximities()
+            if abs(pose[-1] - self.alignment_target_pose[-1]) > np.deg2rad(11):
                 self.get_logger().info("STATE: ROTATING")
                 cmd_vel = Twist() 
-                cmd_vel.angular.z  = np.sign(self.alignment_rotation) * np.pi/90 # [rad/s] 2 degrees/second
+                cmd_vel.angular.z  = 6*(np.sign(self.alignment_rotation) * np.pi/90) # [rad/s] 2 degrees/second
                 self.vel_publisher.publish(cmd_vel)
             else:
                 self.get_logger().info("STATE: STOPPED")
                 self.state = ControllerState.STOPPED
+        elif self.state == ControllerState.STOPPED:
+            self.get_logger().info("STATE: STOPPED")
+            self.done_future.set_result(True)
             
     def compute_rotation(self, dist_R, dist_M, dist_L):
         self.get_logger().info(f"R: {dist_R} L: {dist_L} M: {dist_M}")
@@ -180,7 +195,7 @@ class ControllerThymioNode(Node):
             theta_wr = np.arctan(h / m2)
             print(np.rad2deg(theta_wr))
             return np.pi/2 - theta_wr # CCW rotation
-
+        
 
 def main():
     # Initialize the ROS client library
@@ -188,11 +203,11 @@ def main():
     
     # Create an instance of your node class
     node = ControllerThymioNode()
-    node.start()
+    done=node.start()
     
     # Keep processings events until someone manually shuts down the node
     try:
-        rclpy.spin(node)
+        rclpy.spin_until_future_complete(node, done)
     except KeyboardInterrupt:
         pass
     
