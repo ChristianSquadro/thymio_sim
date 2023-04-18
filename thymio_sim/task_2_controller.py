@@ -12,7 +12,8 @@ from sensor_msgs.msg import Range
 from enum import Enum
 
 import sys
-from thymio_sim.utils import list_mode
+from thymio_sim.utils import list_mode, mkrot, mktransl
+from statistics import mean
 
 class ControllerState(Enum):
     FORWARD = 1,
@@ -41,7 +42,7 @@ class ControllerThymioNode(Node):
 
         proximity_keys = ["center_left", "center", "center_right"]
         self.proximity_readings = {
-            key : deque(maxlen=10) for key in proximity_keys
+            key : deque(maxlen=15) for key in proximity_keys
         }
 
         def make_closure(sensor_name):
@@ -51,11 +52,22 @@ class ControllerThymioNode(Node):
             key : self.create_subscription(Range, '/thymio0/proximity/' + key, make_closure(key), 1)
             for key in proximity_keys
         }
+
+        self.target_rotation_hist = deque(maxlen=5)
         self.stabilization_start = None
         self.theta_rm = 0.6117743042921571
         self.theta_lm = 0.3324939920952909
         self.alignment_target_pose = None
         self.alignment_rotation = None
+
+        self.right_sensor_frame =  mktransl(0.056069172456885794, 0) @ mkrot(-0.5106135853892982)
+        self.left_sensor_frame = mktransl(0.056070991608852434,0) @ mkrot(0.47216591557126225) 
+        self.center_sensor_frame = mktransl(+5.4436e-02, +2.4643e-06)
+
+        self.right_to_self = np.linalg.inv(self.right_sensor_frame)
+        self.left_to_self = np.linalg.inv(self.left_sensor_frame)
+        self.center_to_self = np.linalg.inv(self.center_sensor_frame)
+
 
         
     def start(self):
@@ -79,14 +91,14 @@ class ControllerThymioNode(Node):
         
         pose2d = self.pose3d_to_2d(self.odom_pose)
         
-        self.get_logger().info(
-            "odometry: received pose (x: {:.2f}, y: {:.2f}, theta: {:.2f})".format(*pose2d),
-             throttle_duration_sec=0.5 # Throttle logging frequency to max 2Hz
-        )
-        self.get_logger().info(
-            f"odometry: received pose {msg.pose.pose}",
-             throttle_duration_sec=0.5 # Throttle logging frequency to max 2Hz
-        )
+        # self.get_logger().info(
+        #     "odometry: received pose (x: {:.2f}, y: {:.2f}, theta: {:.2f})".format(*pose2d),
+        #      throttle_duration_sec=0.5 # Throttle logging frequency to max 2Hz
+        # )
+        # self.get_logger().info(
+        #     f"odometry: received pose {msg.pose.pose}",
+        #      throttle_duration_sec=0.5 # Throttle logging frequency to max 2Hz
+        # )
     
     def pose3d_to_2d(self, pose3):
         quaternion = (
@@ -113,7 +125,7 @@ class ControllerThymioNode(Node):
         result = {}
         for k,v in self.proximity_readings.items():
             if len(list(v)) > 0:
-                result[k] = list_mode(list(v))
+                result[k] = mean(list(v))
             else:
                 result[k] = inf
         return result
@@ -125,22 +137,27 @@ class ControllerThymioNode(Node):
             cmd_vel.linear.x  = .5 # [m/s]
             self.vel_publisher.publish(cmd_vel)
             proximity_readings = self.get_last_proximities()
-            if proximity_readings['center'] <= .1:
+            if np.min(list(proximity_readings.values())) <= .07:
                 self.state = ControllerState.STABILIZING
         elif self.state == ControllerState.STABILIZING:
             if self.stabilization_start == None:
+                stable_readings = self.get_stable_proximities()
+                rotation = self.compute_rotation_tolerant(dist_R=stable_readings['center_right'],
+                                             dist_L=stable_readings['center_left'],
+                                             dist_M=stable_readings['center'])
+                self.get_logger().info(f"Rotation: {rotation} ({np.rad2deg(rotation)})", throttle_duration_sec=1)
                 cmd_vel = Twist() 
                 cmd_vel.linear.x  = 0.0 # [m/s]
                 self.vel_publisher.publish(cmd_vel)
                 self.stabilization_start = time()
                 self.get_logger().info("STATE: STABILIZING")
 
-            elif time() - self.stabilization_start >= 1:
+            elif time() - self.stabilization_start >= 3:
                 self.stabilization_start = None
                 self.state = ControllerState.ALIGNING_START
         elif self.state == ControllerState.ALIGNING_START:
             stable_readings = self.get_stable_proximities()
-            rotation = self.compute_rotation(dist_R=stable_readings['center_right'],
+            rotation = self.compute_rotation_tolerant(dist_R=stable_readings['center_right'],
                                              dist_L=stable_readings['center_left'],
                                              dist_M=stable_readings['center'])
             pose = self.pose3d_to_2d(self.odom_pose)
@@ -148,18 +165,37 @@ class ControllerThymioNode(Node):
             target_pose[-1] += rotation
             self.alignment_target_pose = target_pose
             self.alignment_rotation = rotation
+
+            self.target_rotation_hist.appendleft(rotation)
             self.state = ControllerState.ROTATING
             self.get_logger().info("STATE: ROTATING")
             self.get_logger().info(f"Rotation: {rotation} ({np.rad2deg(rotation)})")
         elif self.state == ControllerState.ROTATING:
             pose = self.pose3d_to_2d(self.odom_pose)
-            if abs(pose[-1] - self.alignment_target_pose[-1]) > np.deg2rad(10):
-                self.get_logger().info("STATE: ROTATING")
+            # if abs(pose[-1] - self.alignment_target_pose[-1]) > np.deg2rad(3):
+            if np.abs(mean(list(self.target_rotation_hist))) > np.deg2rad(3):
+                # self.get_logger().info("STATE: ROTATING")
                 cmd_vel = Twist() 
-                cmd_vel.angular.z  = np.sign(self.alignment_rotation) * np.pi/90 # [rad/s] 2 degrees/second
+                cmd_vel.angular.z  = np.sign(self.alignment_rotation) * np.deg2rad(10)
                 self.vel_publisher.publish(cmd_vel)
+                stable_readings = self.get_stable_proximities()
+                rotation = self.compute_rotation_tolerant(dist_R=stable_readings['center_right'],
+                                                dist_L=stable_readings['center_left'],
+                                                dist_M=stable_readings['center'])
+                # pose = self.pose3d_to_2d(self.odom_pose)
+                # target_pose = list(pose)
+                # target_pose[-1] += rotation
+                # self.alignment_target_pose = target_pose
+                # self.alignment_rotation = rotation
+                self.target_rotation_hist.appendleft(rotation)
+                self.get_logger().info(f"Rotation: {rotation} ({np.rad2deg(rotation)})")
+
             else:
                 self.get_logger().info("STATE: STOPPED")
+                cmd_vel = Twist() 
+                cmd_vel.angular.z  = 0.0
+                cmd_vel.linear.x  = 0.0
+                self.vel_publisher.publish(cmd_vel)
                 self.state = ControllerState.STOPPED
             
     def compute_rotation(self, dist_R, dist_M, dist_L):
@@ -180,6 +216,22 @@ class ControllerThymioNode(Node):
             theta_wr = np.arctan(h / m2)
             print(np.rad2deg(theta_wr))
             return np.pi/2 - theta_wr # CCW rotation
+        
+    def compute_rotation_tolerant(self, dist_R, dist_M, dist_L):
+        r_to_self = self.right_sensor_frame @ np.array([dist_R, 0, 1]).T
+        m_to_self = self.center_sensor_frame @ np.array([dist_M, 0, 1]).T
+        l_to_self = self.left_sensor_frame @ np.array([dist_L, 0, 1]).T
+        if dist_L < dist_R:
+            deltas = m_to_self - l_to_self
+            angular_coefficient = deltas[0] / -deltas[1]
+        else:
+            deltas = m_to_self - r_to_self
+            angular_coefficient = deltas[0] / -deltas[1]
+        self.get_logger().info(f"dR: {dist_R} dC: {dist_M} dL: {dist_L}", throttle_duration_sec=1)
+        
+        self.get_logger().info(f"R: {r_to_self} C: {m_to_self} L: {l_to_self}", throttle_duration_sec=1)
+
+        return np.arctan(angular_coefficient)
 
 
 def main():
