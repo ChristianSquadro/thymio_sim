@@ -13,16 +13,20 @@ from enum import Enum
 from rclpy.task import Future
 
 import sys
-from thymio_sim.utils import list_mode, mkrot, mktransl
+from thymio_sim.utils import mkrot, mktransl
 from statistics import mean
 
 class ControllerState(Enum):
     FORWARD_with_SENSOR = 1,
     ROTATING = 2,
     ALIGNING_START = 5,
-    STOPPED = 3,
+    TASK_2_DONE = 3,
     STABILIZING = 4,
     FORWARD_with_ODOMETRY = 6,
+    TASK_3_ROTATING = 7,
+    TASK_3_FORWARD = 8,
+    TASK_3_DONE = 9,
+    WAITING = -1,
 
 
 class ControllerThymioNode(Node):
@@ -71,7 +75,9 @@ class ControllerThymioNode(Node):
         self.left_to_self = np.linalg.inv(self.left_sensor_frame)
         self.center_to_self = np.linalg.inv(self.center_sensor_frame)
 
-
+        self.wait_start_time = None
+        self.after_wait_state = None
+        self.wait_duration = None
         
     def start(self):
         # Create and immediately start a timer that will regularly publish commands
@@ -93,17 +99,6 @@ class ControllerThymioNode(Node):
     def odom_callback(self, msg):
         self.odom_pose = msg.pose.pose
         self.odom_velocity = msg.twist.twist
-        
-        pose2d = self.pose3d_to_2d(self.odom_pose)
-        
-        #self.get_logger().info(
-        #   "odometry: received pose (x: {:.2f}, y: {:.2f}, theta: {:.2f})".format(*pose2d),
-        #     throttle_duration_sec=0.5 # Throttle logging frequency to max 2Hz
-        #)
-        #self.get_logger().info(
-        #    f"odometry: received pose {msg.pose.pose}",
-        #    throttle_duration_sec=0.5 # Throttle logging frequency to max 2Hz
-        #)
     
     def pose3d_to_2d(self, pose3):
         quaternion = (
@@ -138,11 +133,6 @@ class ControllerThymioNode(Node):
     def get_last_prox_without_noise(self):
         return
     def update_callback(self):
-        '''
-        stable_readings = self.get_stable_proximities()
-        self.get_logger().info(str(stable_readings["center_right"]))
-        '''
-        
         if self.state == ControllerState.FORWARD_with_SENSOR:
             cmd_vel = Twist() 
             cmd_vel.linear.x  = .5 # [m/s]
@@ -183,21 +173,15 @@ class ControllerThymioNode(Node):
             self.get_logger().info(f"Rotation: {rotation} ({np.rad2deg(rotation)})")
         elif self.state == ControllerState.ROTATING:
             pose = self.pose3d_to_2d(self.odom_pose)
-            # if abs(pose[-1] - self.alignment_target_pose[-1]) > np.deg2rad(3):
-            if np.abs(mean(list(self.target_rotation_hist))) > np.deg2rad(3):
-                # self.get_logger().info("STATE: ROTATING")
+            target_rotation = mean(list(self.target_rotation_hist))
+            if abs(target_rotation) > np.deg2rad(3):
                 cmd_vel = Twist() 
-                cmd_vel.angular.z  = np.sign(self.alignment_rotation) * np.deg2rad(10)
+                cmd_vel.angular.z  = np.sign(target_rotation) * np.deg2rad(10)
                 self.vel_publisher.publish(cmd_vel)
                 stable_readings = self.get_stable_proximities()
                 rotation = self.compute_rotation_tolerant(dist_R=stable_readings['center_right'],
                                                 dist_L=stable_readings['center_left'],
                                                 dist_M=stable_readings['center'])
-                # pose = self.pose3d_to_2d(self.odom_pose)
-                # target_pose = list(pose)
-                # target_pose[-1] += rotation
-                # self.alignment_target_pose = target_pose
-                # self.alignment_rotation = rotation
                 self.target_rotation_hist.appendleft(rotation)
                 self.get_logger().info(f"Rotation: {rotation} ({np.rad2deg(rotation)})")
 
@@ -207,10 +191,15 @@ class ControllerThymioNode(Node):
                 cmd_vel.angular.z  = 0.0
                 cmd_vel.linear.x  = 0.0
                 self.vel_publisher.publish(cmd_vel)
-                self.state = ControllerState.STOPPED
-        elif self.state == ControllerState.STOPPED:
+                self.state = ControllerState.TASK_2_DONE
+        elif self.state == ControllerState.TASK_2_DONE:
             self.get_logger().info("STATE: STOPPED")
             self.done_future.set_result(True)
+        elif self.state == ControllerState.WAITING:
+            if time() - self.wait_start_time >= self.wait_duration:
+                self.state = self.after_wait_state
+                self.wait_duration = None
+                self.wait_start_time = None
             
     def compute_rotation(self, dist_R, dist_M, dist_L):
         self.get_logger().info(f"R: {dist_R} L: {dist_L} M: {dist_M}")
@@ -246,7 +235,18 @@ class ControllerThymioNode(Node):
         self.get_logger().info(f"R: {r_to_self} C: {m_to_self} L: {l_to_self}", throttle_duration_sec=1)
 
         return np.arctan(angular_coefficient)
+    
+    def send_move_command(self, forward_vel = 0.0, rotation_vel = 0.0):
+        cmd_vel = Twist() 
+        cmd_vel.angular.z  = float(rotation_vel)
+        cmd_vel.linear.x  = float(forward_vel)
+        self.vel_publisher.publish(cmd_vel)
 
+    def wait_for(self, duration, next_state):
+        self.state = ControllerState.WAITING
+        self.wait_duration = duration
+        self.wait_start_time = time()
+        self.after_wait_state = next_state
 
 def main():
     # Initialize the ROS client library
@@ -254,7 +254,9 @@ def main():
     
     # Create an instance of your node class
     node = ControllerThymioNode()
+    node.get_logger().info("Controller created")
     done=node.start()
+    node.get_logger().info("Controller started")
     
     # Keep processings events until someone manually shuts down the node
     try:
