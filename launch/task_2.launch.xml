@@ -23,12 +23,18 @@
        The `namespace` option launches controller_node in the namespace defined by 
        the `thymio_name` launch argument (default: /thymio0). Combined with the use of
        relative topic names in controller_node, this provides a nice way to specify which 
-       robot this node should control.
+        robot this node should control.
        
        The `output` option configures the node to print to the terminal, to help with debugging.
        By default, nodes launched from a launch file print their output to a log file.
   -->
-  <set_parameter name="use_sim_time" value="true" />
   <!-- 'use_sim_time' will be set on all nodes following this line -->
-  <node pkg="thymio_sim" exec="task_2_node" namespace="$(var thymio_name)" output='screen' />
+  <set_parameter name="use_sim_time" value="true" />
+  <node pkg="thymio_sim" exec="task_2_node" namespace="$(var thymio_name)" output='screen' name="task_node"/>
+ 
+  <include file="$(find-pkg-share thymioid)/launch/main.launch">
+          <arg name="device" value="tcp:host=localhost;port=33333"/>
+          <arg name="simulation" value="True"/>
+          <arg name="name" value="$(var thymio_name)" />
+  </include>
 </launch>

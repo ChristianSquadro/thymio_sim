@@ -31,4 +31,10 @@
   <set_parameter name="use_sim_time" value="true" />
   <!-- 'use_sim_time' will be set on all nodes following this line -->
   <node pkg="thymio_sim" exec="task_3_node" namespace="$(var thymio_name)" output='screen' />
+
+   <include file="$(find-pkg-share thymioid)/launch/main.launch">
+          <arg name="device" value="tcp:host=localhost;port=33333"/>
+          <arg name="simulation" value="True"/>
+          <arg name="name" value="$(var thymio_name)" />
+  </include>
 </launch>
