@@ -26,7 +26,7 @@ class ControllerThymioNode(Task2Controller):
                 self.after_rotation_pose = self.pose3d_to_2d(self.odom_pose)
         elif self.state == ControllerState.TASK_3_FORWARD:
             current_pose = self.pose3d_to_2d(self.odom_pose)
-            if pose_distance(self.after_rotation_pose, current_pose) <= 2:
+            if pose_distance(self.after_rotation_pose, current_pose) <= 2.35:
                 self.send_move_command(forward_vel=.5)
             else:
                 self.send_move_command(forward_vel=0)
@@ -37,7 +37,7 @@ class ControllerThymioNode(Task2Controller):
 
     def opposing_wall(self):
         prox_readings = self.get_stable_proximities()
-        return abs(prox_readings['rear_left'] - prox_readings['rear_right']) < .01 and prox_readings['rear_left'] != inf
+        return abs(prox_readings['rear_left'] - prox_readings['rear_right']) <= 0.1 and (prox_readings['rear_left'] != inf or prox_readings['rear_right'] != inf)
 
 
 

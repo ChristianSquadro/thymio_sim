@@ -19,6 +19,8 @@ from statistics import mean
 class ControllerState(Enum):
     FORWARD_with_SENSOR = 1,
     ROTATING = 2,
+    ROTATING_RANDOM = 10,
+    GENERATING_ANGLE= 11,
     ALIGNING_START = 5,
     TASK_2_DONE = 3,
     STABILIZING = 4,
@@ -47,9 +49,9 @@ class ControllerThymioNode(Node):
         # self.odom_callback every time a message is received
         self.odom_subscriber = self.create_subscription(Odometry, 'odom', self.odom_callback, 1)
 
-        proximity_keys = ["center_left", "center", "center_right", "rear_left", "rear_right"]
+        self.proximity_keys = ["center_left", "center", "center_right", "rear_left", "rear_right"]
         self.proximity_readings = {
-            key : deque(maxlen=15) for key in proximity_keys
+            key : deque(maxlen=15) for key in self.proximity_keys
         }
 
         def make_closure(sensor_name):
@@ -57,7 +59,7 @@ class ControllerThymioNode(Node):
 
         self.proximity_subs = {
             key : self.create_subscription(Range, '/thymio0/proximity/' + key, make_closure(key), 1)
-            for key in proximity_keys
+            for key in self.proximity_keys
         }
 
         self.target_rotation_hist = deque(maxlen=5)
