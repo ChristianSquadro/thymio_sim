@@ -7,7 +7,7 @@ is a bonus task launch file. In order to run the nodes open three terminals:
   2. colcon build --packages-up-to thymio_sim
 	
 -In the second one:
-  3. cd ~/apps/CoppeliaSim_Edu_V4_4_0_rev0_Ubuntu22_04
+  3. cd ~/apps/CoppeliaSim_Edu_V4_4_0_rev0_Ubuntu22_0
   4. bash coppeliaSim.sh
   5.1 For the compulsory tasks: load scene wall_v2.ttt and start the simulation (with real-time mode enabled)
   5.2 For the bonus tasks: load HW2scene.ttt and start the simulation (with real-time mode enabled)
