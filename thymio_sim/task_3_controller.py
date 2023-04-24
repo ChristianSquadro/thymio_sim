@@ -40,14 +40,6 @@ class ControllerThymioNode(Task2Controller):
         return abs(prox_readings['rear_left'] - prox_readings['rear_right']) <= 0.1 and (prox_readings['rear_left'] != inf or prox_readings['rear_right'] != inf)
 
 
-
-
-
-
-            
-
-        
-
 def main():
     # Initialize the ROS client library
     rclpy.init(args=sys.argv)

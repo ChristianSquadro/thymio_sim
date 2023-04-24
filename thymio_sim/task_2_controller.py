@@ -58,7 +58,7 @@ class ControllerThymioNode(Node):
             return lambda msg: self.proximity_callback(sensor_name, msg)
 
         self.proximity_subs = {
-            key : self.create_subscription(Range, '/thymio0/proximity/' + key, make_closure(key), 1)
+            key : self.create_subscription(Range, 'proximity/' + key, make_closure(key), 1)
             for key in self.proximity_keys
         }
 
