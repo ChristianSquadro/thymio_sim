@@ -2,7 +2,7 @@ from math import inf
 import rclpy
 import numpy as np
 
-from thymio_sim.task_2_controller import ControllerThymioNode as Task2Controller, ControllerState
+from thymio_sim.thymio_controller import ThymioController, ControllerState
 from geometry_msgs.msg import Twist
 
 from collections import deque
@@ -44,46 +44,30 @@ class SteeringController():
         return y
 
 
-class ControllerThymioNode(Task2Controller):
+class ControllerThymioNode(ThymioController):
     def __init__(self):
-        super().__init__()
+        super().__init__("task_bonus_controller")
         self.after_rotation_pose = None
         self.target_rotation = None
 
-        self.new_proximity_keys = ["center_left",
-                                   "center", "center_right", "left", "right"]
-        self.new_proximity_readings = {
-            key: deque(maxlen=15) for key in self.new_proximity_keys
-        }
-
-        def make_closure(sensor_name):
-            return lambda msg: self.new_proximity_callback(sensor_name, msg)
-
-        self.new_proximity_subs = {
-            key: self.create_subscription(
-                Range, 'proximity/' + key, make_closure(key), 1)
-            for key in self.new_proximity_keys
-        }
+        self.proximity_keys = ["center_left",
+                               "center", "center_right", "left", "right"]
 
         self.prox_min_val = .0215
         self.prox_max_val = .138
         self.steer_controller = SteeringController(
             4, 0, 0, prox_max_val=self.prox_max_val, prox_min_val=self.prox_min_val, steer_max_angle=np.deg2rad(30))
 
-    def new_proximity_callback(self, sensor: str, msg: Range):
-        to_append = self.prox_max_val if msg.range == - \
-            1 or msg.range > self.prox_max_val else msg.range
-        self.new_proximity_readings[sensor].appendleft(to_append)
-
-    def get_last_proximities(self):
-        return {k: list(v)[0] if len(list(v)) > 0 else inf for k, v in self.new_proximity_readings.items()}
+        self.proximity_init(self.proximity_keys, clamp_val=self.prox_max_val)
 
     def update_callback(self):
 
+        forward_vel = 0.0
+        rotation_vel = 0.0
+
         if self.state == ControllerState.FORWARD_with_SENSOR:
-            cmd_vel = Twist()
-            cmd_vel.linear.x = .5  # [m/s]
-            proximity_readings = self.get_last_proximities()
+            forward_vel = .5
+            proximity_readings = self.last_proximities()
 
             left_prox = proximity_readings['left']
             right_prox = proximity_readings['right']
@@ -94,27 +78,27 @@ class ControllerThymioNode(Task2Controller):
 
             if not np.isnan(steering):
                 if steering != 0:
-                    cmd_vel.linear.x /= 5
-                cmd_vel.angular.z = steering
+                    forward_vel /= 5
+                rotation_vel = steering
             if proximity_readings['center'] <= .035:
-                cmd_vel.linear.x = 0.0
+                forward_vel = 0.0
 
-            if cmd_vel.linear.x == 0.0 and cmd_vel.angular.z == 0.0 or (np.isclose(left_prox, self.prox_min_val) and np.isclose(right_prox, self.prox_min_val)):
+            if forward_vel == 0.0 and rotation_vel == 0.0 or (np.isclose(left_prox, self.prox_min_val) and np.isclose(right_prox, self.prox_min_val)):
                 # Somehow we got stuck, nudge the robot a bit and hope for the best
                 self.random_rotation = np.deg2rad(
                     90) * np.sign(np.random.random_sample() - .5)
                 self.state = ControllerState.ROTATING
-            self.vel_publisher.publish(cmd_vel)
         elif self.state == ControllerState.ROTATING:
-            proximity_readings = self.get_last_proximities()
+            proximity_readings = self.last_proximities()
             left_prox = proximity_readings['left']
             right_prox = proximity_readings['right']
             if np.isclose(left_prox, 0.138) and np.isclose(right_prox, 0.138):
                 self.state = ControllerState.FORWARD_with_SENSOR
             else:
-                cmd_vel = Twist()
-                cmd_vel.angular.z = self.random_rotation
-                self.vel_publisher.publish(cmd_vel)
+                forward_vel = 0
+                rotation_vel = self.random_rotation
+
+        self.send_move_command(forward_vel, rotation_vel)
 
 
 def main():
